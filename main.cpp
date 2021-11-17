@@ -1,6 +1,7 @@
 #include <iostream>
 #include <unistd.h>
 #include <cmath>
+#include <cstring>
 
 using namespace std;
 
@@ -12,6 +13,7 @@ using namespace std;
 #define NO_OF_TOTAL_BLOCKS 209767
 
 string diskPrefix = "disks/d_";
+string diskExt = ".txt";
 string diskpath;
 
 
@@ -36,54 +38,108 @@ long long int total_disk_size = 1 * sizeof(struct SuperBlock) +
 								NO_OF_INODES * sizeof(struct Inode) + 
 								NO_OF_DATA_BLOCKS * BLOCK_SIZE;
 
+long long int inodeStartingIndex = sizeof(struct SuperBlock) + NO_OF_INODES * sizeof(struct fileInodeMap);
+long long int dataBlockStartingIndex = inodeStartingIndex + NO_OF_DATA_BLOCKS * BLOCK_SIZE;
+
 struct fileInodeMap globalFileInodeMap[NO_OF_INODES];
 struct SuperBlock globalSuperBlock;
 
-void initializeDisk(struct SuperBlock *sb, FILE *diskDescriptor) {
-	for(int i = 0; i < NO_OF_INODES; i++) {
-		sb->free_inodes[i] = true;
-	}
-	for(int i = 0; i < NO_OF_DATA_BLOCKS; i++) {
-		sb->free_data_blocks[i] = true;
+void initializeDisk(string diskpath) {
+	/* *** Writing SUPER BLOCK */
+	FILE*  diskDescriptor = fopen(diskpath.c_str(), "wb");
+	//fseek(diskDescriptor, 0, SEEK_SET);
+
+	cout << "init sb object" << endl;
+	struct SuperBlock sb;
+	long int i;
+	cout << "filling free blocks values" << endl;
+	for(i = 0; i < NO_OF_INODES; i++) {
+		sb.free_inodes[i] = true;
 	}
 
-	int sb_size = ceil(((float)sizeof(sb)));
+	cout << "written free inodes" << endl;
+	for(i = 0; i < NO_OF_DATA_BLOCKS; i++) {
+		sb.free_data_blocks[i] = true;
+	}
+
+	cout << "written free data blocks" << endl;
 	fseek(diskDescriptor, 0, SEEK_SET);
-
-	fwrite(&sb, sizeof(struct SuperBlock), 1, diskDescriptor);
+	long long int sb_size = sizeof(sb);
+	char sbBuff[sb_size];
+    	memset(sbBuff, 0, sb_size);
+    	memcpy(sbBuff, &sb, sizeof(sb));
+    	fwrite(sbBuff, sizeof(char), sizeof(sb), diskDescriptor);
 
 	cout << "written 1 superblock" << endl;
-
+	/* WRITING SUPER BLOCK FINISHED */
+	
+	/* WRITING FILE INODE MAP BEGIN */
 	fseek(diskDescriptor, sb_size, SEEK_SET);
 
 	struct fileInodeMap tempFileInodeMap[NO_OF_INODES];
-	int fileInodeMapSize = ceil(((float)sizeof(struct fileInodeMap)));
-
-	fwrite(&tempFileInodeMap, fileInodeMapSize, NO_OF_INODES, diskDescriptor);
+	long long int fileInodeMapSize = sizeof(tempFileInodeMap);
+	
+	char fileInodeMapBuff[fileInodeMapSize];
+    	memset(fileInodeMapBuff, 0, fileInodeMapSize);
+    	memcpy(fileInodeMapBuff, tempFileInodeMap, fileInodeMapSize);
+    	fwrite(fileInodeMapBuff, sizeof(char), fileInodeMapSize, diskDescriptor);
 
 	cout << "written " << NO_OF_INODES << " file inode map" << endl;
 
-	int fileInodeSize = ceil(((float)sizeof(struct Inode)));
-	int offset = sb_size + NO_OF_INODES * fileInodeMapSize;
-	fseek(diskDescriptor, offset, SEEK_SET);
+	/* WRITING FILE INODE MAP END */
+
+	/* WRITING INODE BLCOKS BEGIN */
 
 	struct Inode tempInodeArr[NO_OF_INODES];
-	fwrite(&tempInodeArr, fileInodeSize, NO_OF_INODES, diskDescriptor);
+	int fileInodeSize = sizeof(tempInodeArr);
+	int offset = sb_size + fileInodeMapSize;
+	
+	fseek(diskDescriptor, offset, SEEK_SET);
+	
+	char inodeBuff[fileInodeSize];
+    	memset(inodeBuff, 0, fileInodeSize);
+    	memcpy(inodeBuff, tempInodeArr, fileInodeSize);
+    	fwrite(inodeBuff, sizeof(char), fileInodeSize, diskDescriptor);
 
 	cout << "written " << NO_OF_INODES << " inodes" << endl;
+
+	/* WRITING INODE BLOCKS END */
 
 	fclose(diskDescriptor);
 }
 
+void initiateDisk(FILE* diskDescriptor) {
+	char buffer[BLOCK_SIZE];
+	memset(buffer, 0, BLOCK_SIZE);
+
+	for(int i = 0; i < NO_OF_TOTAL_BLOCKS; i++) {
+		fwrite(buffer, 1, BLOCK_SIZE, diskDescriptor);
+	}
+}
 
 void create_disk(string diskname, string diskpath) {
-	FILE *diskDescriptor = fopen(diskpath.c_str(), "wb"); 
+	cout << "initiating disk creation" << endl;
+	FILE *diskDescriptor = fopen(diskpath.c_str(), "wb");
 
-	fseek(diskDescriptor, total_disk_size, SEEK_SET);
-	fputc('\0', diskDescriptor);
+	if(diskDescriptor == NULL) {
+		cout << "could not create file" << endl;
+	}	
+	
+	initiateDisk(diskDescriptor);
 
-	struct SuperBlock *sb = (struct SuperBlock*)malloc(1 * sizeof(struct SuperBlock));;
-	initializeDisk(sb, diskDescriptor);
+	cout << "completed disk initialization" << endl;
+
+	fclose(diskDescriptor);
+	
+	//cout << "writing initial disk data" << endl;
+
+	if(diskDescriptor == NULL) {
+		cout << "could not fill disk file" << endl;
+	}	
+	
+	initializeDisk(diskpath);	
+	
+	//fclose(diskDescriptor);
 
 	return;
 }
@@ -101,7 +157,7 @@ int main() {
 			cout << "Enter disk name : ";
 			cin >>  diskname;
 
-			diskpath = diskPrefix + diskname;
+			diskpath = diskPrefix + diskname + diskExt;
 			
 			if(access(diskpath.c_str(), F_OK) != -1) {
 				cout << "Disk already exists" << endl;
