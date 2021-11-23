@@ -73,6 +73,8 @@ void initializeDiskFile(string diskpath) {
     sb.free_data_blocks[i] = true;
   }
 
+  sb.no_of_files = 0;
+
   cout << "written free data blocks" << endl;
   fseek(diskDescriptor, 0, SEEK_SET);
 
@@ -329,7 +331,6 @@ void writeContentToFile(string diskpath, char *mode, int start_block,
 }
 
 void appendContentToFile(int start_block, int offset, string content) {
-
   FILE *disk_descriptor = fopen(mount_diskpath.c_str(), "rb+");
   fseek(disk_descriptor,
         dataBlockStartingIndex + ((start_block)*BLOCK_SIZE) + offset, SEEK_SET);
@@ -362,6 +363,10 @@ void setDataBlocksBusy(long int start_block, long int end_block) {
   }
 }
 
+void setInodeBusy(int inode_index) {
+	globalSuperBlock.free_inodes[inode_index] = false;
+}
+
 void addDataBlockRefToInode(int inode_index, long int start_block,
                             long int end_block) {
   for (int i = start_block; i <= end_block; i++) {
@@ -376,6 +381,10 @@ string readAllFileContent(string diskpath, int start_block,
   FILE *disk_descriptor = fopen(diskpath.c_str(), "rb+");
   string file_content = "";
   long int end_block = start_block + (size_to_read / BLOCK_SIZE);
+
+  cout << "reading from start block : " << start_block << endl;
+  cout << "reading from end block : " << end_block << endl;
+
   for (int i = start_block; i <= end_block; i++) {
     char *content_buffer = (char *)malloc(BLOCK_SIZE + 1);
     fseek(disk_descriptor, dataBlockStartingIndex + (i * BLOCK_SIZE), SEEK_SET);
@@ -446,7 +455,7 @@ void initiateWriteOperation(string diskpath) {
   cout << "writing content from data block " << start_block << " to "
        << end_block << endl;
 
-  writeContentToFile(diskpath, "wb+", start_block, end_block, content_to_write);
+  writeContentToFile(diskpath, "rb+", start_block, end_block, content_to_write);
   if (verifyWrittenContent(diskpath, start_block, end_block,
                            content_to_write)) {
     cout << "Content written successfully and verified" << endl;
@@ -539,6 +548,16 @@ void initiateAppendOperation(int inode_index) {
                       content_to_append);
 
   globalInodeArr[inode_index].file_size += content_to_append.length();
+}
+
+string getModeText(int mode) {
+	if (mode == 1) {
+		return "read";
+	} else if (mode == 2) {
+		return "write";
+	}
+
+	return "append";
 }
 
 int main() {
@@ -657,6 +676,7 @@ int main() {
         globalInodeArr[freeInodeIndex].file_size = 0;
 
         setDataBlocksBusy(first_free_data_block, first_free_data_block + 9);
+	setInodeBusy(freeInodeIndex);
         cout << "set data blocks as busy" << endl;
 
         addDataBlockRefToInode(freeInodeIndex, first_free_data_block,
@@ -669,10 +689,9 @@ int main() {
         cout << "insert entry in filename to fd map" << endl;
 
         free(charFilename);
-
+	
+	globalSuperBlock.no_of_files++;
         cout << "Created file sccessfully" << endl;
-
-        continue;
       } else if (option == 2) {
         cout << "Enter filename to open: ";
         cin >> currently_open_filename;
@@ -783,7 +802,7 @@ int main() {
         filename_to_close = fd_iter->second;
         for (int i = 0; i < NO_OF_INODES; i++) {
           if (strcmp(globalFileInodeMap[i].filename,
-                     filename_to_read.c_str()) == 0) {
+                     filename_to_close.c_str()) == 0) {
             temp_inode_index = globalFileInodeMap[i].inodeIndex;
             filename_to_close_found = true;
             break;
@@ -840,6 +859,24 @@ int main() {
         }
 
         initiateAppendOperation(temp_inode_index);
+      } else if (option == 8) {
+        cout << "Files currently on the disk : " << globalSuperBlock.no_of_files << endl;
+
+        for (int i = 0; i < globalSuperBlock.no_of_files; i++) {
+          cout << globalFileInodeMap[i].filename << endl;
+        }
+      } else if (option == 9) {
+        cout << "List of currently opened files : " << endl;
+        for (int i = 0; i < globalSuperBlock.no_of_files; i++) {
+          auto file_iter = fileNameToFdMap.find(globalFileInodeMap[i].filename);
+
+          if (file_iter == fileNameToFdMap.end() || globalInodeArr[globalFileInodeMap[i].inodeIndex].mode == 0) {
+            continue;
+          }
+          cout << file_iter->second << " ";
+          cout << globalFileInodeMap[i].filename << " ";
+          cout << getModeText(globalInodeArr[globalFileInodeMap[i].inodeIndex].mode) << endl;
+        }
       }
     }
   }
