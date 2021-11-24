@@ -1,6 +1,6 @@
 #include <bits/stdc++.h>
 #include <unistd.h>
-
+#include <signal.h>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -17,6 +17,8 @@ using namespace std;
 string diskPrefix = "disks/d_";
 // string diskExt = ".txt";
 string mount_diskpath = "";
+string mount_diskname = "";
+bool isMounted = false;
 
 struct SuperBlock {
   bool free_inodes[NO_OF_INODES];
@@ -146,6 +148,43 @@ void initializeDiskFile(string diskpath) {
   fclose(diskDescriptor);
 }
 
+void unmountDisk() {
+  FILE *diskDescriptor = fopen(mount_diskpath.c_str(), "rb+");
+  char *sbBuff = (char *)malloc(sizeof(char) * sizeof(globalSuperBlock));
+  memset(sbBuff, 0, sizeof(globalSuperBlock));
+  memcpy(sbBuff, &globalSuperBlock, sizeof(globalSuperBlock));
+
+  fwrite(sbBuff, sizeof(char), sizeof(globalSuperBlock), diskDescriptor);
+
+  free(sbBuff);
+
+  fseek(diskDescriptor, sizeof(globalSuperBlock), SEEK_SET);
+
+  long long int fileInodeMapSize = sizeof(globalFileInodeMap);
+
+  char *fileInodeMapBuff = (char *)malloc(sizeof(char) * fileInodeMapSize);
+
+  memset(fileInodeMapBuff, 0, fileInodeMapSize);
+  memcpy(fileInodeMapBuff, globalFileInodeMap, fileInodeMapSize);
+
+  fwrite(fileInodeMapBuff, sizeof(char), fileInodeMapSize, diskDescriptor);
+
+  free(fileInodeMapBuff);
+
+  long long int fileInodeSize = sizeof(globalInodeArr);
+  fseek(diskDescriptor, inodeStartingIndex, SEEK_SET);
+
+  char *inodeBuff = (char *)malloc(sizeof(char) * fileInodeSize);
+  memset(inodeBuff, 0, fileInodeSize);
+  memcpy(inodeBuff, globalInodeArr, fileInodeSize);
+
+  fwrite(inodeBuff, sizeof(char), fileInodeSize, diskDescriptor);
+
+  free(inodeBuff);
+
+  fclose(diskDescriptor);
+}
+
 void initiateEmptySb(FILE *diskDescriptor) {
   fseek(diskDescriptor, 0, SEEK_SET);
   char sbBuffer[sizeof(struct SuperBlock) + 1];
@@ -203,16 +242,9 @@ void initiateDisk(string diskpath) {
 void create_disk(string diskname, string diskpath) {
   initiateDisk(diskpath);
   cout << "completed disk initialization" << endl;
-  // cout << "writing initial disk data" << endl;
-
-  /* if(diskDescriptor == NULL) {
-          cout << "could not fill disk file" << endl;
-  }*/
-
-  // fclose(diskDescriptor);
-
   return;
 }
+
 bool mountDisk(string diskPath) {
   FILE *diskDescriptor = fopen(diskPath.c_str(), "rb+");
 
@@ -240,14 +272,6 @@ bool mountDisk(string diskPath) {
   memcpy(&globalInodeArr, inodeArrBuff, globalInodeArrSize);
   free(inodeArrBuff);
   cout << "copied inode blocks" << endl;
-
-  /*long long int globalDataSize = NO_OF_DATA_BLOCKS * DATA_SIZE;
-   char *dataBuff = (char *)malloc(globalDataSize);
-   fseek(diskDescriptor, dataBlockStartingIndex, SEEK_SET);
-   memset(dataBuff, 0, globalDataSize);
-   fread(dataBuff, sizeof(char), globalDataSize);
-   memcpy(&global, dataBuff, globalDataSize);
-   free(inodeArrBuff);*/
 
   fclose(diskDescriptor);
 
@@ -364,7 +388,7 @@ void setDataBlocksBusy(long int start_block, long int end_block) {
 }
 
 void setInodeBusy(int inode_index) {
-	globalSuperBlock.free_inodes[inode_index] = false;
+  globalSuperBlock.free_inodes[inode_index] = false;
 }
 
 void addDataBlockRefToInode(int inode_index, long int start_block,
@@ -551,17 +575,30 @@ void initiateAppendOperation(int inode_index) {
 }
 
 string getModeText(int mode) {
-	if (mode == 1) {
-		return "read";
-	} else if (mode == 2) {
-		return "write";
+  if (mode == 1) {
+    return "read";
+  } else if (mode == 2) {
+    return "write";
+  }
+
+  return "append";
+}
+
+void signal_callback_handler(int signum) {
+ 	if (isMounted) {
+		cout << "Cannot close the application as mount path is busy" << endl;
+		return;
 	}
 
-	return "append";
+	exit(signum);
 }
 
 int main() {
-  bool isMounted = false;
+
+  signal(SIGINT, signal_callback_handler);
+
+  isMounted = false; 
+  bool isUnmountAllowed = true;
   string filename, currently_open_filename, create_diskpath;
   ;
   int currently_open_file_mode;
@@ -578,6 +615,7 @@ int main() {
     filename_to_read_found = false;
     filename_to_close_found = false;
     filename_to_append_found = false;
+    isUnmountAllowed = true;
 
     string create_diskname;
 
@@ -598,7 +636,6 @@ int main() {
         // create_disk(diskname, diskpath);
         initializeDiskFile(create_diskpath);
       } else if (option == 2) {
-        string mount_diskname;
         cout << "Enter disk name to mount  ";
         cin >> mount_diskname;
 
@@ -676,21 +713,15 @@ int main() {
         globalInodeArr[freeInodeIndex].file_size = 0;
 
         setDataBlocksBusy(first_free_data_block, first_free_data_block + 9);
-	setInodeBusy(freeInodeIndex);
+        setInodeBusy(freeInodeIndex);
         cout << "set data blocks as busy" << endl;
 
         addDataBlockRefToInode(freeInodeIndex, first_free_data_block,
-                               first_free_data_block + 9);
-
-        int fd_index = fdToFilenameMap.size();
-        fdToFilenameMap.insert(make_pair(fd_index, filename));
-        cout << "insert entry in fd to filename map" << endl;
-        fileNameToFdMap.insert(make_pair(filename, fd_index));
-        cout << "insert entry in filename to fd map" << endl;
+                               first_free_data_block + 9); 
 
         free(charFilename);
-	
-	globalSuperBlock.no_of_files++;
+
+        globalSuperBlock.no_of_files++;
         cout << "Created file sccessfully" << endl;
       } else if (option == 2) {
         cout << "Enter filename to open: ";
@@ -731,16 +762,22 @@ int main() {
           continue;
         }
 
-        auto fd_iter = fileNameToFdMap.find(currently_open_filename);
+	int fd_index = fdToFilenameMap.size();
+        fdToFilenameMap.insert(make_pair(fd_index, currently_open_filename));
+        cout << "insert entry in fd to filename map" << endl;
+        fileNameToFdMap.insert(make_pair(currently_open_filename, fd_index));
+        cout << "insert entry in filename to fd map" << endl;
+
+        /*auto fd_iter = fileNameToFdMap.find(currently_open_filename);
 
         if (fd_iter == fileNameToFdMap.end()) {
           cout << "file doesn't exist on the disk" << endl;
           continue;
-        }
+        }*/
 
         globalInodeArr[temp_inode_index].mode = currently_open_file_mode + 1;
 
-        cout << "fd: " << fd_iter->second
+        cout << "fd: " << fd_index
              << " filename: " << currently_open_filename
              << " mode: " << globalInodeArr[temp_inode_index].mode << endl;
       } else if (option == 3) {
@@ -860,7 +897,8 @@ int main() {
 
         initiateAppendOperation(temp_inode_index);
       } else if (option == 8) {
-        cout << "Files currently on the disk : " << globalSuperBlock.no_of_files << endl;
+        cout << "Files currently on the disk : " << globalSuperBlock.no_of_files
+             << endl;
 
         for (int i = 0; i < globalSuperBlock.no_of_files; i++) {
           cout << globalFileInodeMap[i].filename << endl;
@@ -870,14 +908,37 @@ int main() {
         for (int i = 0; i < globalSuperBlock.no_of_files; i++) {
           auto file_iter = fileNameToFdMap.find(globalFileInodeMap[i].filename);
 
-          if (file_iter == fileNameToFdMap.end() || globalInodeArr[globalFileInodeMap[i].inodeIndex].mode == 0) {
+          if (file_iter == fileNameToFdMap.end() ||
+              globalInodeArr[globalFileInodeMap[i].inodeIndex].mode == 0) {
             continue;
           }
           cout << file_iter->second << " ";
           cout << globalFileInodeMap[i].filename << " ";
-          cout << getModeText(globalInodeArr[globalFileInodeMap[i].inodeIndex].mode) << endl;
+          cout << getModeText(
+                      globalInodeArr[globalFileInodeMap[i].inodeIndex].mode)
+               << endl;
         }
-      }
+      } else if (option == 10) {
+        cout << "unmounting disk " << mount_diskname << endl;
+
+        for (int i = 0; i < globalSuperBlock.no_of_files; i++) {
+          if (globalInodeArr[globalFileInodeMap[i].inodeIndex].mode != 0) {
+            cout << "disk is still in use. Please close all open files before "
+                    "unmounting"
+                 << endl;
+	    isUnmountAllowed = false;
+            break;
+          }
+        }
+
+	if (!isUnmountAllowed) {
+		continue;
+	}
+
+        unmountDisk();
+        isMounted = false;
+        cout << "unmounted disk successfully" << endl;
+      } 
     }
   }
 
